@@ -1,0 +1,9 @@
+# fio is not in the UBI repos (no entitlement needed for Fedora), so use Fedora minimal.
+FROM registry.fedoraproject.org/fedora-minimal:latest
+RUN microdnf install -y --setopt=install_weak_deps=0 --nodocs fio fio-engine-libaio python3 \
+    && microdnf clean all
+COPY entrypoint.py /usr/local/bin/entrypoint.py
+RUN chmod 0755 /usr/local/bin/entrypoint.py
+USER 1001
+WORKDIR /work
+ENTRYPOINT ["python3", "/usr/local/bin/entrypoint.py"]

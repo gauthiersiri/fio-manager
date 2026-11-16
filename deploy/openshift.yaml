@@ -1,0 +1,292 @@
+---
+# ImageStreams + binary BuildConfigs: FALLBACK only, used by deploy/build-and-deploy.sh
+# when the ghcr.io images (built by .github/workflows/build-images.yml) are not usable.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: fio-manager
+  namespace: fio-manager
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: fio-runner
+  namespace: fio-manager
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: fio-manager
+  namespace: fio-manager
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Containerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: fio-manager:latest
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: fio-runner
+  namespace: fio-manager
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Containerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: fio-runner:latest
+---
+# Identity of the manager. The annotation lets oauth-proxy use this SA as OAuth client.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fio-manager
+  namespace: fio-manager
+  annotations:
+    serviceaccounts.openshift.io/oauth-redirectreference.primary: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"fio-manager"}}'
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fio-manager
+  namespace: fio-manager
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims", "configmaps"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fio-manager
+  namespace: fio-manager
+subjects:
+  - kind: ServiceAccount
+    name: fio-manager
+    namespace: fio-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fio-manager
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fio-manager-storageclasses
+rules:
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fio-manager-storageclasses
+subjects:
+  - kind: ServiceAccount
+    name: fio-manager
+    namespace: fio-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fio-manager-storageclasses
+---
+# SQLite database lives here.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fio-manager-data
+  namespace: fio-manager
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fio-manager
+  namespace: fio-manager
+  labels:
+    app: fio-manager
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # SQLite on an RWO volume: exactly one writer
+  selector:
+    matchLabels:
+      app: fio-manager
+  template:
+    metadata:
+      labels:
+        app: fio-manager
+    spec:
+      serviceAccountName: fio-manager
+      containers:
+        - name: manager
+          image: ghcr.io/gauthiersiri/fio-manager:latest
+          imagePullPolicy: Always
+          env:
+            - name: FIO_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: FIO_RUNNER_IMAGE
+              value: ghcr.io/gauthiersiri/fio-manager-runner:latest
+            - name: FIO_INTERNAL_URL
+              value: http://fio-manager-internal.fio-manager.svc:8081
+            - name: FIO_PUBLIC_HOST
+              value: 127.0.0.1   # only reachable through the oauth-proxy sidecar
+            - name: FIO_DATA_DIR
+              value: /data
+          ports:
+            - containerPort: 8081
+              name: internal
+          readinessProbe:
+            tcpSocket:
+              port: 8081
+          livenessProbe:
+            tcpSocket:
+              port: 8081
+            initialDelaySeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        - name: oauth-proxy
+          image: image-registry.openshift-image-registry.svc:5000/openshift/oauth-proxy:v4.4
+          args:
+            - --https-address=:8443
+            - --provider=openshift
+            - --openshift-service-account=fio-manager
+            - --upstream=http://127.0.0.1:8080
+            - --tls-cert=/etc/tls/private/tls.crt
+            - --tls-key=/etc/tls/private/tls.key
+            - --cookie-secret-file=/etc/proxy/secrets/session_secret
+            - '--openshift-sar={"namespace":"fio-manager","resource":"services","resourceName":"fio-manager","verb":"get"}'
+            - --skip-auth-regex=^/api/health$
+          ports:
+            - containerPort: 8443
+              name: web
+          readinessProbe:
+            tcpSocket:
+              port: 8443
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: proxy-tls
+              mountPath: /etc/tls/private
+            - name: proxy-secret
+              mountPath: /etc/proxy/secrets
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: fio-manager-data
+        - name: proxy-tls
+          secret:
+            secretName: fio-manager-tls
+        - name: proxy-secret
+          secret:
+            secretName: fio-manager-proxy
+---
+# Web UI / API (through oauth-proxy)
+apiVersion: v1
+kind: Service
+metadata:
+  name: fio-manager
+  namespace: fio-manager
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: fio-manager-tls
+spec:
+  selector:
+    app: fio-manager
+  ports:
+    - name: web
+      port: 8443
+      targetPort: web
+---
+# Results endpoint used by the runner pods only (token protected)
+apiVersion: v1
+kind: Service
+metadata:
+  name: fio-manager-internal
+  namespace: fio-manager
+spec:
+  selector:
+    app: fio-manager
+  ports:
+    - name: internal
+      port: 8081
+      targetPort: internal
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: fio-manager
+  namespace: fio-manager
+spec:
+  to:
+    kind: Service
+    name: fio-manager
+  port:
+    targetPort: web
+  tls:
+    termination: reencrypt
+    insecureEdgeTerminationPolicy: Redirect
+---
+# Runner pods may only talk to the manager's internal endpoint and DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fio-runner-egress
+  namespace: fio-manager
+spec:
+  podSelector:
+    matchExpressions:
+      - key: fio-manager/run-id
+        operator: Exists
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: fio-manager
+      ports:
+        - { protocol: TCP, port: 8081 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+      ports:
+        - { protocol: UDP, port: 5353 }
+        - { protocol: TCP, port: 5353 }

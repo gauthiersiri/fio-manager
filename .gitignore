@@ -1,0 +1,25 @@
+# Dependencies and build output
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.vite/
+
+# Local data and logs
+data/
+*.log
+.DS_Store
+
+# Secrets and credentials (never commit)
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+kubeconfig*
+
+# Tooling
+.bob/
