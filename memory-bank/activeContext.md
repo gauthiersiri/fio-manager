@@ -1,6 +1,6 @@
 # Active Context
 
-_Last updated: after adding the GitHub repo, `.gitignore` and the ghcr.io image workflow (not yet pushed or run)._
+_Last updated: after the first push to GitHub and the first successful image build on ghcr.io._
 
 ## Current state
 - Application is deployed on the cluster and working (namespace `fio-manager`, Route behind OAuth).
@@ -10,7 +10,7 @@ _Last updated: after adding the GitHub repo, `.gitignore` and the ghcr.io image 
 - Frontend migrated from IBM Carbon to Tailwind CSS v4 + shadcn-style components (`src/components/ui/`, Radix) + Recharts. `npm run build` passes (JS 202 kB + charts chunk 554 kB, CSS 28 kB, fonts bundled, no external URL in `dist/`). **The new UI has not been redeployed and the browser look has not been checked.**
 
 ## Immediate next steps
-0. Publish: user reviews the file list, then first commit and `git push -u origin main` to `git@github.com:gauthiersiri/fio-manager.git`. Check the first Actions run (multi-arch builds through QEMU can be slow), set both ghcr.io packages to Public, then `./deploy/deploy.sh`. The cluster Deployment still points at the internal registry until `deploy.sh`/`oc apply` is run.
+0. Code is on `gauthiersiri/fio-manager` (branch `main`). The first workflow run succeeded, and `ghcr.io/gauthiersiri/fio-manager{,-runner}:latest` exist for amd64, arm64, ppc64le and s390x and can be pulled anonymously. Push with the SSH alias `git@github.com-ibm:...` (the default key belongs to another GitHub account). The cluster Deployment still points at the internal registry until `./deploy/deploy.sh` (or `oc apply`) is run.
 1. Redeploy (frontend dist is copied into the manager image), then open the Route in a browser and check Runs, RunForm, RunDetail (graphs, logs) and Compare. Fix visual or runtime issues.
 2. Run one more real fio run from the UI to check live progress and graphs.
 
