@@ -31,6 +31,7 @@ Default: images are built by GitHub Actions (`.github/workflows/build-images.yml
 
 Fallback: images built in-cluster (binary BuildConfigs), because there is no local Podman.
 - Full: `./deploy/build-and-deploy.sh` (frontend build, apply manifests, build runner, build manager, repoint the Deployment at the internal registry, rollout). Each image build is about 1 min, so total can exceed a 270 s tool timeout. Run it in the background or step by step. A later `deploy.sh` or `oc apply` switches back to ghcr.io.
+- Validated on 2026-11-16: `build-and-deploy.sh` ran end to end in the background (about 3 min in total): frontend build, both in-cluster builds pushed, Deployment repointed at the internal registry, rollout done, `/api/health` returned 200. It needs no commit, no push and no GitHub Action: it uploads the local working tree. Caveats: it builds for the cluster architecture only (amd64), it runs `oc apply` first (which resets the images to ghcr.io) and then `oc set image`/`oc set env`, so there can be an extra rollout, and no fio run was started with the in-cluster runner image.
 - Manual runner rebuild: `oc start-build fio-runner -n fio-manager --from-dir=runner --follow`
 - Manual manager rebuild: stage `Containerfile`, `backend/requirements.txt`, `backend/app`, `frontend/dist` in a temp dir, then `oc start-build fio-manager -n fio-manager --from-dir=<dir> --follow` and `oc rollout restart deployment/fio-manager -n fio-manager`.
 - Call the API: `deploy/api.sh METHOD PATH [bodyfile]`. It runs curl inside the manager pod through `oc exec`.
